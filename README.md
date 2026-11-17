@@ -21,16 +21,16 @@ Designed and deployed a virtualized out-of-band network sensor to passively capt
 
 ### 1. Sensor Network Configuration
 Configured the stealth SPAN interface using Netplan and enabled promiscuous mode at the kernel level to ensure all packets on the wire were captured.
-*(Insert Phase 4 Screenshot here: Netplan and `PROMISC` interface status)*
+![Phase 1 - Netplan and Promiscuous Mode](Screenshot%202026-11-16%20182022.png)
 
 ### 2. IDS Engine Provisioning
 Bypassed clipboard auto-formatting constraints by staging repository URLs in variables, successfully installing Suricata and Zeek from their official package repositories, and updating the system PATH.
-*(Insert Phase 5 Screenshot here: Suricata and Zeek version outputs)*
+![Phase 2 - Engine Versions](Screenshot%202026-11-16%20125429.png)
 
 ### 3. Engine Configuration & Integration
 Modified `/etc/suricata/suricata.yaml` and `/opt/zeek/etc/node.cfg` via the CLI to bind both security engines exclusively to the stealth SPAN interface.
-*(Insert Phase 6 Screenshot here: Zeek deployed and Suricata active status)*
+![Phase 3 - Engine Status](Screenshot%202026-11-16%20215116.png)
 
 ### 4. Attack Simulation & Telemetry Verification
 Overcame auto-managed interface constraints in Kali Linux by manually forcing a dummy IP address and MAC routing. Generated malicious traffic using Nmap (`nmap -sS`). Verified that both engines successfully captured the out-of-band traffic in real-time.
-*(Insert Phase 7 Screenshot here: Zeek conn.log and Suricata eve.json output)*
+![Phase 4 - IDS Telemetry logs](Screenshot%202026-11-16%20215143.png)
