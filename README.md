@@ -2,7 +2,7 @@
 
 A home lab where I built an out-of-band network sensor that passively watches traffic on an isolated network segment, then generated scan traffic from an attacker VM to test detection.
 
-> **Status:** Sensor built, Suricata running with the Emerging Threats ruleset (53,000+ rules enabled), Zeek running on the sniffing interface, and SYN scans generated from Kali. Capturing alerts from the scan is in progress; see [Verification](#6-verification-in-progress).
+> **Result:** The passive sensor detected an Nmap SYN scan from the attacker VM. Suricata (Emerging Threats ruleset, 53,000+ rules enabled) raised `ET SCAN` alerts for probes to MySQL, Oracle, MSSQL, PostgreSQL, and VNC ports. See [Verification](#6-verification).
 
 ## Skills demonstrated
 
@@ -64,7 +64,7 @@ Restarted Suricata and deployed Zeek; both engines running:
 ![Suricata restarted, Zeek running](images/07-zeek-running.png)
 
 ### 5. Attack simulation
-Gave Kali's lab interface an address (`10.10.10.5/24`), added a static ARP entry for a target, and ran a SYN scan of the top 1,000 ports:
+Gave Kali's lab interface an address (`10.10.10.5/24`), mapped the target IP `10.10.10.50` to the sensor's sniffing-interface MAC with a static ARP entry, and ran a SYN scan of the top 1,000 ports. The sensor has no IP, so it silently drops the probes (nothing replies, hence "filtered"), but its capture engines see every packet:
 
 ```bash
 sudo nmap -sS -Pn -n --disable-arp-ping --send-ip -T4 --max-retries 1 10.10.10.50
@@ -72,16 +72,24 @@ sudo nmap -sS -Pn -n --disable-arp-ping --send-ip -T4 --max-retries 1 10.10.10.5
 
 ![Nmap SYN scan from Kali](images/08-nmap-syn-scan.png)
 
-### 6. Verification (in progress)
-Zeek on the sensor logs broadcast and multicast traffic from Kali's lab interface, confirming both VMs share the monitored segment. The unicast scan packets are not yet reaching the sensor's capture; next step is addressing the scan to the sensor's MAC so the hypervisor delivers it to the sniffing interface.
+### 6. Verification
+Suricata detected the scan within seconds. `fast.log` shows Emerging Threats `ET SCAN` alerts for SYN probes from `10.10.10.5` to commonly targeted database and remote-access ports:
+
+| Signature ID | Alert | Port |
+|---|---|---|
+| 2010937 | ET SCAN Suspicious inbound to mySQL port 3306 | 3306 |
+| 2010936 | ET SCAN Suspicious inbound to Oracle SQL port 1521 | 1521 |
+| 2010935 | ET SCAN Suspicious inbound to MSSQL port 1433 | 1433 |
+| 2002910 | ET SCAN Potential VNC Scan 5800-5820 | 5801 |
+| 2010939 | ET SCAN Suspicious inbound to PostgreSQL port 5432 | 5432 |
+
+![Suricata fast.log with ET SCAN alerts](images/10-suricata-scan-alerts.png)
 
 ```bash
-# On the sensor: scan alerts and Zeek connection log
 sudo tail -n 20 /var/log/suricata/fast.log
-sudo cat /opt/zeek/logs/current/conn.log | /opt/zeek/bin/zeek-cut ts id.orig_h id.resp_h id.resp_p conn_state | tail -n 20
 ```
 
-<!-- TODO: add screenshots of fast.log scan alerts and Zeek conn.log here once captured -->
+<!-- TODO: add Zeek conn.log screenshot (S0 connection states from the scan) -->
 
 ## Troubleshooting and lessons learned
 
@@ -103,11 +111,14 @@ sudo cat /opt/zeek/logs/current/conn.log | /opt/zeek/bin/zeek-cut ts id.orig_h i
 
 - **First scan never reached the lab network.** Kali's lab interface (`eth1`) had no IPv4 address, so the route to the target went out the NAT interface instead. Assigned `10.10.10.5/24` to `eth1` and confirmed with `ip route get`.
 - **Nmap ignored the static ARP entry.** On a local subnet Nmap does its own ARP lookup, got no reply, and marked the host down without scanning. `--disable-arp-ping --send-ip` makes it use the kernel's routing and ARP table instead.
+- **The sensor saw broadcasts but not the scan.** Zeek logged Kali's IPv6 neighbor discovery and DHCP broadcasts, so both VMs were on the same segment, but none of the unicast SYN probes. The scan was addressed to a MAC that didn't exist on the network, and the hypervisor's virtual switch didn't deliver those frames to the sensor. Mapping the target IP to the sensor's own MAC fixed it; with no IP on the sniffing interface the sensor still never responds. On a physical network the equivalent fix is a SPAN or TAP feeding the sensor a copy of all traffic.
+- **Settings don't survive a reboot.** After restarting the VMs, Kali's lab IP and the sensor's promiscuous flag were gone and Zeek needed `zeekctl deploy` again. Making these persistent (Netplan on Kali/sensor, `zeekctl cron` or a systemd unit for Zeek) is on the next-steps list.
 - **`sudo` and redirects.** `sudo cmd < file` fails on root-only files because the shell opens the file before `sudo` runs; `sudo cat file | cmd` works.
 - **Pasting long repository URLs into the VM console broke them.** I stored the URLs in shell variables first, then used the variables in the install commands.
 
 ## Next steps
 
-- Capture Suricata alerts and Zeek logs from a live scan (above)
+- Add Zeek `conn.log` evidence of the scan
+- Make interface settings and Zeek startup persistent across reboots
 - Write a custom Suricata rule and trigger it
 - Forward logs to a SIEM (e.g. Splunk Free or Elastic) and build a simple dashboard
