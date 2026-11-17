@@ -2,7 +2,7 @@
 
 A home lab where I built an out-of-band network sensor that passively watches traffic on an isolated network segment, then generated scan traffic from an attacker VM to test detection.
 
-> **Result:** The passive sensor detected an Nmap SYN scan from the attacker VM. Suricata (Emerging Threats ruleset, 53,000+ rules enabled) raised `ET SCAN` alerts for probes to MySQL, Oracle, MSSQL, PostgreSQL, and VNC ports. See [Verification](#6-verification).
+> **Result:** The passive sensor detected an Nmap SYN scan from the attacker VM. Suricata (Emerging Threats ruleset, 53,000+ rules enabled) raised `ET SCAN` alerts for probes to MySQL, Oracle, MSSQL, PostgreSQL, and VNC ports, and Zeek logged the scan as a burst of unanswered (`S0`) connection attempts. See [Verification](#6-verification).
 
 ## Skills demonstrated
 
@@ -89,7 +89,13 @@ Suricata detected the scan within seconds. `fast.log` shows Emerging Threats `ET
 sudo tail -n 20 /var/log/suricata/fast.log
 ```
 
-<!-- TODO: add Zeek conn.log screenshot (S0 connection states from the scan) -->
+Zeek independently recorded the scan in `conn.log`: a burst of connection attempts from `10.10.10.5` to `10.10.10.50` across many ports within the same second, each with state `S0` (SYN sent, no reply). That pattern of many short, unanswered connections to different ports is the signature of a SYN scan, even without a signature-based alert.
+
+![Zeek conn.log showing S0 connection attempts](images/11-zeek-conn-log-scan.png)
+
+```bash
+sudo cat /opt/zeek/logs/current/conn.log | /opt/zeek/bin/zeek-cut ts id.orig_h id.resp_h id.resp_p conn_state | tail -n 20
+```
 
 ## Troubleshooting and lessons learned
 
@@ -118,7 +124,6 @@ sudo tail -n 20 /var/log/suricata/fast.log
 
 ## Next steps
 
-- Add Zeek `conn.log` evidence of the scan
 - Make interface settings and Zeek startup persistent across reboots
 - Write a custom Suricata rule and trigger it
 - Forward logs to a SIEM (e.g. Splunk Free or Elastic) and build a simple dashboard
