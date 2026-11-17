@@ -2,7 +2,7 @@
 
 A home lab where I built an out-of-band network sensor that passively watches traffic on an isolated network segment, then generated scan traffic from an attacker VM to test detection.
 
-> **Status:** Sensor, sniffing interface, and both IDS engines are installed and configured. Detection verification (alerts and Zeek logs from a live scan) is in progress; see [Verification](#4-verification).
+> **Status:** Sensor built, Suricata running with the Emerging Threats ruleset (53,000+ rules enabled), Zeek running on the sniffing interface, and SYN scans generated from Kali. Capturing alerts from the scan is in progress; see [Verification](#6-verification-in-progress).
 
 ## Skills demonstrated
 
@@ -52,31 +52,33 @@ Installed Suricata and Zeek from their official package repositories and added Z
 ![Suricata and Zeek versions](images/02-engine-versions.png)
 
 ### 3. Binding both engines to the sniffing interface
-Edited `/etc/suricata/suricata.yaml` (af-packet interface) and `/opt/zeek/etc/node.cfg` so both engines listen only on `enp0s8`.
+Set the af-packet interface in `/etc/suricata/suricata.yaml` and `interface=enp0s8` in `/opt/zeek/etc/node.cfg` so both engines listen only on the sniffing interface.
 
-![Suricata running, Zeek status](images/03-service-status.png)
+### 4. Loading rules and starting the engines
+Pulled the Emerging Threats Open ruleset with `suricata-update` (69,469 rules, 53,495 enabled), set `EXTERNAL_NET` to `any` so lab-internal scans are evaluated by scan rules, and confirmed the config with `suricata -T`.
 
-### 4. Verification
-Suricata starts and captures packets on the sniffing interface (packet counters in `eve.json` stats):
+![suricata-update and config test](images/06-suricata-rules-loaded.png)
 
-![Suricata eve.json stats](images/05-eve-stats.png)
+Restarted Suricata and deployed Zeek; both engines running:
 
-Remaining verification steps:
+![Suricata restarted, Zeek running](images/07-zeek-running.png)
+
+### 5. Attack simulation
+Gave Kali's lab interface an address (`10.10.10.5/24`), added a static ARP entry for a target, and ran a SYN scan of the top 1,000 ports:
 
 ```bash
-# Load the free Emerging Threats ruleset, then restart Suricata
-sudo suricata-update
-sudo systemctl restart suricata
+sudo nmap -sS -Pn -n --disable-arp-ping --send-ip -T4 --max-retries 1 10.10.10.50
+```
 
-# Start Zeek
-sudo /opt/zeek/bin/zeekctl deploy
+![Nmap SYN scan from Kali](images/08-nmap-syn-scan.png)
 
-# From Kali: SYN scan a target on the monitored segment
-sudo nmap -sS <target-ip>
+### 6. Verification (in progress)
+Zeek on the sensor logs broadcast and multicast traffic from Kali's lab interface, confirming both VMs share the monitored segment. The unicast scan packets are not yet reaching the sensor's capture; next step is addressing the scan to the sensor's MAC so the hypervisor delivers it to the sniffing interface.
 
-# On the sensor: check for scan alerts and connection logs
+```bash
+# On the sensor: scan alerts and Zeek connection log
 sudo tail -n 20 /var/log/suricata/fast.log
-sudo tail -n 20 /opt/zeek/logs/current/conn.log
+sudo cat /opt/zeek/logs/current/conn.log | /opt/zeek/bin/zeek-cut ts id.orig_h id.resp_h id.resp_p conn_state | tail -n 20
 ```
 
 <!-- TODO: add screenshots of fast.log scan alerts and Zeek conn.log here once captured -->
@@ -87,8 +89,21 @@ sudo tail -n 20 /opt/zeek/logs/current/conn.log
 
   ![Suricata startup log showing no rules loaded](images/04-suricata-startup-log.png)
 
-- **Zeek installed but not started.** `zeekctl status` showed `stopped`; Zeek needs `zeekctl deploy` to install its config and start.
-- **Kali had no address on the internal network.** With no DHCP server on the isolated segment, I assigned a static IP manually so Nmap could send traffic.
+  The `eve.json` stats from that run confirm it: packets captured, but `rules_loaded: 0` and `alert: 0`.
+
+  ![Suricata eve.json stats](images/05-eve-stats.png)
+
+- **Zeek crashed on start.** `zeekctl status` showed `stopped`, and `zeekctl deploy` failed with "terminated immediately." `zeekctl diag` showed the cause: `node.cfg` still had the default `interface=eth0`, which doesn't exist on this sensor. Fixed by setting `interface=enp0s8`.
+
+  ![zeekctl diag showing eth0 interface error](images/09-zeek-diag-interface-error.png)
+
+  Earlier service status, before both fixes:
+
+  ![Suricata running, Zeek stopped](images/03-service-status.png)
+
+- **First scan never reached the lab network.** Kali's lab interface (`eth1`) had no IPv4 address, so the route to the target went out the NAT interface instead. Assigned `10.10.10.5/24` to `eth1` and confirmed with `ip route get`.
+- **Nmap ignored the static ARP entry.** On a local subnet Nmap does its own ARP lookup, got no reply, and marked the host down without scanning. `--disable-arp-ping --send-ip` makes it use the kernel's routing and ARP table instead.
+- **`sudo` and redirects.** `sudo cmd < file` fails on root-only files because the shell opens the file before `sudo` runs; `sudo cat file | cmd` works.
 - **Pasting long repository URLs into the VM console broke them.** I stored the URLs in shell variables first, then used the variables in the install commands.
 
 ## Next steps
